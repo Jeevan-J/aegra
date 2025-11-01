@@ -43,6 +43,8 @@ dependencies = [
     "langfuse>=3.3.4",
     "structlog>=25.4.0",
     "asgi-correlation-id>=4.3.4",
+    "ag-ui-langgraph>=0.0.16",
+    "copilotkit>=0.1.67",
 ]
 
 [project.urls]

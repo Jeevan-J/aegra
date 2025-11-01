@@ -28,6 +28,26 @@ class StreamingService:
     ) -> tuple[Any, bool]:
         """Process interrupt updates logic - returns (processed_event, should_skip)"""
         if (
+            isinstance(raw_event, dict)
+            and "event" in raw_event
+            and "chunk" in raw_event.get("data", {})
+            and isinstance(raw_event["data"]["chunk"], tuple)
+            and raw_event["data"]["chunk"][0] == "updates"
+            and only_interrupt_updates
+        ):
+            # User didn't request updates - only process interrupt updates
+            updates = raw_event["data"]["chunk"][1]
+            if (
+                isinstance(updates, dict)
+                and "__interrupt__" in updates
+                and len(updates.get("__interrupt__", [])) > 0
+            ):
+                # Convert interrupt updates to values events
+                return ("values", updates), False
+            else:
+                # Skip non-interrupt updates when not requested
+                return raw_event, True
+        elif (
             isinstance(raw_event, tuple)
             and len(raw_event) >= 2
             and raw_event[0] == "updates"
@@ -97,6 +117,20 @@ class StreamingService:
         stream_mode_label = None
         event_payload = None
 
+        if isinstance(processed_event, dict) and "event" in processed_event:
+            # event dict format
+            if "chunk" in processed_event.get("data", {}) and isinstance(
+                processed_event["data"]["chunk"], tuple
+            ):
+                chunk = processed_event["data"]["chunk"]
+                if len(chunk) >= 2:
+                    stream_mode_label = chunk[0]
+                    event_payload = chunk[1]
+                    if len(chunk) == 3:
+                        node_path = chunk[2]
+            await store_sse_event(
+                run_id, event_id, "events", {"type": "event", "event": processed_event}
+            )
         if isinstance(processed_event, tuple):
             if len(processed_event) == 2:
                 stream_mode_label, event_payload = processed_event
@@ -114,12 +148,16 @@ class StreamingService:
                 "messages",
                 {
                     "type": "messages_stream",
-                    "message_chunk": event_payload[0]
-                    if isinstance(event_payload, tuple) and len(event_payload) >= 1
-                    else event_payload,
-                    "metadata": event_payload[1]
-                    if isinstance(event_payload, tuple) and len(event_payload) >= 2
-                    else None,
+                    "message_chunk": (
+                        event_payload[0]
+                        if isinstance(event_payload, tuple) and len(event_payload) >= 1
+                        else event_payload
+                    ),
+                    "metadata": (
+                        event_payload[1]
+                        if isinstance(event_payload, tuple) and len(event_payload) >= 2
+                        else None
+                    ),
                     "node_path": node_path,
                 },
             )

@@ -67,7 +67,9 @@ class EventConverter:
 
     def _parse_raw_event(self, raw_event: Any) -> tuple[str, Any]:
         """Parse raw event into (stream_mode, payload)"""
-        if isinstance(raw_event, tuple):
+        if isinstance(raw_event, dict) and "event" in raw_event: # handle events from graph
+            return "events", raw_event
+        elif isinstance(raw_event, tuple):
             if len(raw_event) == 2:
                 return raw_event[0], raw_event[1]
             elif len(raw_event) == 3:

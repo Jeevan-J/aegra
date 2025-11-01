@@ -11,8 +11,12 @@ from langgraph.graph import StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.runtime import Runtime
 
+from langchain_core.runnables import RunnableConfig
+from copilotkit.langgraph import copilotkit_emit_state
+import asyncio
+
 from react_agent.context import Context
-from react_agent.state import InputState, State
+from react_agent.state import InputState, State, AgentState
 from react_agent.tools import TOOLS
 from react_agent.utils import load_chat_model
 
@@ -20,7 +24,7 @@ from react_agent.utils import load_chat_model
 
 
 async def call_model(
-    state: State, runtime: Runtime[Context]
+    state: AgentState, runtime: Runtime[Context], config: RunnableConfig
 ) -> dict[str, list[AIMessage]]:
     """Call the LLM powering our "agent".
 
@@ -33,6 +37,17 @@ async def call_model(
     Returns:
         dict: A dictionary containing the model's response message.
     """
+    state["searches"] = [
+        {"query": "Initial research", "done": False},
+        {"query": "Retrieving sources", "done": False},
+        {"query": "Forming an answer", "done": False},
+    ]
+    await copilotkit_emit_state(config, state)
+    # Simulate state updates
+    for search in state["searches"]:
+        await asyncio.sleep(1)
+        search["done"] = True
+        await copilotkit_emit_state(config, state)
     # Initialize the model with tool binding. Change the model or add more tools here.
     model = load_chat_model(runtime.context.model).bind_tools(TOOLS)
 
@@ -45,12 +60,12 @@ async def call_model(
     response = cast(
         "AIMessage",
         await model.ainvoke(
-            [{"role": "system", "content": system_message}, *state.messages]
+            [{"role": "system", "content": system_message}, *state["messages"]]
         ),
     )
 
     # Handle the case when it's the last step and the model still wants to use a tool
-    if state.is_last_step and response.tool_calls:
+    if state["is_last_step"] and response.tool_calls:
         return {
             "messages": [
                 AIMessage(
@@ -66,7 +81,7 @@ async def call_model(
 
 # Define a new graph
 
-builder = StateGraph(State, input_schema=InputState, context_schema=Context)
+builder = StateGraph(AgentState, input_schema=InputState, context_schema=Context)
 
 # Define the two nodes we will cycle between
 builder.add_node(call_model)
@@ -77,7 +92,7 @@ builder.add_node("tools", ToolNode(TOOLS))
 builder.add_edge("__start__", "call_model")
 
 
-def route_model_output(state: State) -> Literal["__end__", "tools"]:
+def route_model_output(state: AgentState) -> Literal["__end__", "tools"]:
     """Determine the next node based on the model's output.
 
     This function checks if the model's last message contains tool calls.
@@ -88,7 +103,7 @@ def route_model_output(state: State) -> Literal["__end__", "tools"]:
     Returns:
         str: The name of the next node to call ("__end__" or "tools").
     """
-    last_message = state.messages[-1]
+    last_message = state["messages"][-1]
     if not isinstance(last_message, AIMessage):
         raise ValueError(
             f"Expected AIMessage in output edges, but got {type(last_message).__name__}"

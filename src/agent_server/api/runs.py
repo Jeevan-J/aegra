@@ -824,52 +824,90 @@ async def execute_run_async(
         only_interrupt_updates = not user_requested_updates
 
         async with with_auth_ctx(user, []):
-            async for raw_event in graph.astream(
-                execution_input,
-                config=run_config,
-                context=context,
-                subgraphs=subgraphs,
-                stream_mode=final_stream_modes,
-            ):
-                # Skip events that contain langsmith:nostream tag
-                if _should_skip_event(raw_event):
-                    continue
+            # handle events separately
+            if "events" in final_stream_modes:
+                async for raw_event in graph.astream_events(
+                    execution_input,
+                    config=run_config,
+                    context=context,
+                    subgraphs=subgraphs,
+                    stream_mode=final_stream_modes,
+                ):
+                    # Skip events that contain langsmith:nostream tag
+                    if _should_skip_event(raw_event):
+                        continue
+                    event_counter += 1
+                    event_id = f"{run_id}_event_{event_counter}"
+                    # Forward to broker for live consumers
+                    await streaming_service.put_to_broker(
+                        run_id,
+                        event_id,
+                        raw_event,
+                        only_interrupt_updates=only_interrupt_updates,
+                    )
+                    # Store for replay
+                    await streaming_service.store_event_from_raw(
+                        run_id,
+                        event_id,
+                        raw_event,
+                        only_interrupt_updates=only_interrupt_updates,
+                    )
+                    # TODO: track interrupt events in event stream if needed
+                    
+                    # Track final output
+                    if isinstance(raw_event, tuple):
+                        if len(raw_event) >= 2 and raw_event[0] == "values":
+                            final_output = raw_event[1]
+                    elif not isinstance(raw_event, tuple):
+                        # Non-tuple events are values mode
+                        final_output = raw_event
+            else:
+                async for raw_event in graph.astream(
+                    execution_input,
+                    config=run_config,
+                    context=context,
+                    subgraphs=subgraphs,
+                    stream_mode=final_stream_modes,
+                ):
+                    print(f"[execute_run_async] run_id={run_id} raw_event={raw_event}")
+                    # Skip events that contain langsmith:nostream tag
+                    if _should_skip_event(raw_event):
+                        continue
 
-                event_counter += 1
-                event_id = f"{run_id}_event_{event_counter}"
+                    event_counter += 1
+                    event_id = f"{run_id}_event_{event_counter}"
+                    # Forward to broker for live consumers
+                    await streaming_service.put_to_broker(
+                        run_id,
+                        event_id,
+                        raw_event,
+                        only_interrupt_updates=only_interrupt_updates,
+                    )
+                    # Store for replay
+                    await streaming_service.store_event_from_raw(
+                        run_id,
+                        event_id,
+                        raw_event,
+                        only_interrupt_updates=only_interrupt_updates,
+                    )
 
-                # Forward to broker for live consumers
-                await streaming_service.put_to_broker(
-                    run_id,
-                    event_id,
-                    raw_event,
-                    only_interrupt_updates=only_interrupt_updates,
-                )
-                # Store for replay
-                await streaming_service.store_event_from_raw(
-                    run_id,
-                    event_id,
-                    raw_event,
-                    only_interrupt_updates=only_interrupt_updates,
-                )
+                    # Check for interrupt in this event
+                    event_data = None
+                    if isinstance(raw_event, tuple) and len(raw_event) >= 2:
+                        event_data = raw_event[1]
+                    elif not isinstance(raw_event, tuple):
+                        event_data = raw_event
 
-                # Check for interrupt in this event
-                event_data = None
-                if isinstance(raw_event, tuple) and len(raw_event) >= 2:
-                    event_data = raw_event[1]
-                elif not isinstance(raw_event, tuple):
-                    event_data = raw_event
+                    if isinstance(event_data, dict) and "__interrupt__" in event_data:
+                        has_interrupt = True
 
-                if isinstance(event_data, dict) and "__interrupt__" in event_data:
-                    has_interrupt = True
-
-                # Track final output
-                if isinstance(raw_event, tuple):
-                    if len(raw_event) >= 2 and raw_event[0] == "values":
-                        final_output = raw_event[1]
-                elif not isinstance(raw_event, tuple):
-                    # Non-tuple events are values mode
-                    final_output = raw_event
+                    # Track final output
+                    if isinstance(raw_event, tuple):
+                        if len(raw_event) >= 2 and raw_event[0] == "values":
+                            final_output = raw_event[1]
+                    elif not isinstance(raw_event, tuple):
+                        # Non-tuple events are values mode
+                        final_output = raw_event
 
         if has_interrupt:
             await update_run_status(

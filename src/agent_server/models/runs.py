@@ -22,7 +22,7 @@ class RunCreate(BaseModel):
         None,
         description="Checkpoint configuration (e.g., {'checkpoint_id': '...', 'checkpoint_ns': ''})",
     )
-    stream: bool = Field(False, description="Enable streaming response")
+    stream: bool = Field(True, description="Enable streaming response") # Enabling the stream by default
     stream_mode: str | list[str] | None = Field(
         None, description="Requested stream mode(s) as per LangGraph"
     )

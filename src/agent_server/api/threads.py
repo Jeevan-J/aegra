@@ -45,6 +45,52 @@ thread_state_service = ThreadStateService()
 
 # In-memory storage removed; using database via ORM
 
+# Helper function to create a thread with a specific ID, Because copilot kit
+# calls get_thread with random thread id and expects it to be created
+# Langgraph dev server also creates a thread id if it doesn't exist I believe
+async def _create_thread_with_id(
+    thread_id: str,
+    user: User,
+    session: AsyncSession,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Thread:
+    """Helper function to create a thread with a specific ID"""
+    # Build metadata with required fields
+    thread_metadata = metadata or {}
+    thread_metadata.update(
+        {
+            "owner": user.identity,
+            "assistant_id": None,  # Will be set when first run is created
+            "graph_id": None,  # Will be set when first run is created
+            "thread_name": "",  # User can update this later
+        }
+    )
+
+    thread_orm = ThreadORM(
+        thread_id=thread_id,
+        status="idle",
+        metadata_json=thread_metadata,
+        user_id=user.identity,
+    )
+    session.add(thread_orm)
+    await session.commit()
+
+    try:
+        await session.refresh(thread_orm)
+    except Exception:
+        pass
+
+    # Return Thread model
+    return Thread.model_validate(
+        {
+            "thread_id": thread_id,
+            "status": "idle",
+            "metadata": thread_metadata,
+            "user_id": user.identity,
+            "created_at": getattr(thread_orm, "created_at", datetime.now(UTC)),
+        }
+    )
+
 
 @router.post("/threads", response_model=Thread)
 async def create_thread(
@@ -157,7 +203,9 @@ async def get_thread(
     )
     thread = await session.scalar(stmt)
     if not thread:
-        raise HTTPException(404, f"Thread '{thread_id}' not found")
+        # Create a new thread with the requested ID
+        logger.info(f"Thread '{thread_id}' not found, creating new thread")
+        return await _create_thread_with_id(thread_id, user, session)
 
     return Thread.model_validate(
         {
